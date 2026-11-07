@@ -188,9 +188,9 @@ test('convertFlow 拒绝坏来源并给可读错误', async () => {
 })
 
 // ---------- API 鉴权 ----------
-test('requestRejection：拿不到鉴权服务时 fail closed', () => {
+test('requestRejection：无 connection 服务时放行（宿主 token 已把关）', () => {
   const noService = { get: () => undefined }
-  assert.equal(requestRejection(noService, { headers: {} }), 403)
+  assert.equal(requestRejection(noService, { headers: {} }), false) // 宿主 token 鉴权是边界，服务缺席放行
   const okService = { get: () => ({ requestRejection: () => false }) }
   assert.equal(requestRejection(okService, { headers: {} }), false)
 })
