@@ -55,6 +55,13 @@ scripts/dev-sandbox.ps1 4313   # 隔离 DSH_HOME 起网页版（Windows）；bas
 - 面板每个请求都过宿主鉴权（`connection.requestRejection`）+ 同源校验；静态产物只伺服 `$DSH_HOME/perler-studio/` 内的文件。
 - 插件不携带任何密钥。⚠️ **提醒**：上游仓库 perler-beads-ai 的 `env` 文件曾明文提交过火山引擎 AK/SK（已随仓库公开）——如果你用过那对密钥，请尽快到[火山引擎控制台](https://console.volcengine.com)轮换/禁用。本插件的 AI 风格化（二期）会把 AK/SK 做成用户配置，不硬编码。
 
+
+## 安装
+
+```bash
+dsh plugin --profile web add dsh-perler-studio
+```
+
 ## 许可
 
 Apache-2.0。核心算法与色板数据移植自 [perler-beads-ai](https://github.com/liangdabiao/perler-beads-ai)（基于 [Zippland/perler-beads](https://github.com/Zippland/perler-beads) 上游），保留其 Apache-2.0 声明。
