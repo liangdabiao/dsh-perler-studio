@@ -45,7 +45,6 @@
     }
   },
   "dependencies": {
-    "@deepseek-ai/schemastery": "^3.18.0",
     "jpeg-js": "^0.4.4",
     "pngjs": "^7.0.0"
   },
