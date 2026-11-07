@@ -1,11 +1,11 @@
 // ============================================================================
 // 拼豆工坊 · Host 半边（Node 主进程，纯 ESM 零构建）。
-// 两个工具：perler_studio（转换/读取/列项目/采购清单）、perler_palette（色号查询）。
-// 一个 webServer 前缀路由：面板数据面（与工具共用 lib/flows.js，一份逻辑两个入口）。
-// 二期预留：optimize action（火山即梦 4.0 AI 风格化，见 lib/jimeng.js 位置）。
+// 工具：perler_studio（转换/AI 风格化/读取/列项目/采购清单）、perler_palette（色号查询）。
+// webServer 前缀路由：面板数据面（与工具共用 lib/flows.js，一份逻辑两个入口）。
+// AI 风格化 = 火山即梦 4.0（lib/jimeng.js）；AK/SK 走 Config，绝不硬编码、绝不回显。
 // ============================================================================
 import Schema from '@deepseek-ai/schemastery'
-import { convertFlow, readFlow, listFlow, shoppingListFlow, reconvertFlow, ImageSourceError } from '../lib/flows.js'
+import { convertFlow, readFlow, listFlow, shoppingListFlow, reconvertFlow, optimizeFlow, ImageSourceError, JimengError } from '../lib/flows.js'
 import { computeStats } from '../lib/pixelate.js'
 import { shoppingList as makeShoppingList } from '../lib/exporter.js'
 import { lookupHex, nearestPaletteColors, hexToRgb, rgbToHex, paletteInfo, COLOR_SYSTEMS } from '../lib/palette.js'
@@ -16,12 +16,15 @@ export const name = 'perler-studio' // = cordis.patch.yml 的 id
 export const inject = ['tools', 'webServer', 'connection']
 
 // ---------------------------------------------------------------------------
-// 用户配置。密钥一期不引入（AI 风格化在二期，届时 volcAccessKeyId/volcSecretAccessKey
-// 也放这里，绝不硬编码——源仓库 env 里的明文密钥已泄露，不要复用）。
+// 用户配置。volcAccessKeyId / volcSecretAccessKey 是火山引擎即梦 4.0 的凭证
+// （https://console.volcengine.com/ai/ability/detail/1 申请）；留空 = AI 风格化不可用，
+// 其余功能不受影响。密钥只在工具/面板内部使用，任何回执与接口都不会返回它。
 // ---------------------------------------------------------------------------
 export const Config = Schema.object({
   defaultGranularity: Schema.number().min(5).max(200).default(50).description('默认横向格子数'),
   defaultSystem: Schema.string().default('MARD').description('默认色号系统'),
+  volcAccessKeyId: Schema.string().default('').description('火山引擎 AccessKeyId（即梦 4.0 图生图，可选）'),
+  volcSecretAccessKey: Schema.string().default('').description('火山引擎 SecretAccessKey（敏感，仅本插件使用）'),
 })
 
 const configRef = { config: Config }
@@ -77,10 +80,12 @@ export const perlerStudioTool = {
     additionalProperties: false,
     required: ['action'],
     properties: {
-      action: str('convert 转换；read 读项目；list 列项目；shopping 采购清单；reconvert 改参数重转', { enum: ['convert', 'read', 'list', 'shopping', 'reconvert'] }),
+      action: str('convert 转换；optimize AI 风格化后自动重转；read 读项目；list 列项目；shopping 采购清单；reconvert 改参数重转', { enum: ['convert', 'optimize', 'read', 'list', 'shopping', 'reconvert'] }),
       name: str('项目名（即存档目录名）：字母/数字/中文短横线等，不要带路径符或空格'),
       title: str('可选：展示标题'),
-      image: str('convert：图片来源（绝对路径 / http(s) URL / dataURI / "attachments"）'),
+      image: str('convert/optimize：图片来源（绝对路径 / http(s) URL / dataURI / "attachments"）。optimize 缺省用项目已有源图'),
+      prompt: str('optimize 可选：风格化提示词。缺省用内置的 chibi 像素画风格'),
+      thenConvert: str('optimize 可选：风格化后是否自动重转本项目，默认 true', { enum: ['true', 'false'] }),
       granularity: num('convert：横向格子数 5~200，默认 50。颗粒越少越简单，越多越细腻'),
       mode: str('convert：dominant 卡通风（主色）/ average 真实风（均值）', { enum: ['dominant', 'average'] }),
       mergeThreshold: num('convert：近似色合并阈值 0~255，默认 30。越大颜色越少'),
@@ -89,7 +94,7 @@ export const perlerStudioTool = {
       limit: num('shopping：只看前 N 色（默认全部）'),
     },
   },
-  timeoutMs: 60_000,
+  timeoutMs: 200_000,
   output: OUTPUT,
   async execute(args) {
     check(args, this.parameters)
@@ -113,6 +118,27 @@ export const perlerStudioTool = {
           `已生成拼豆底稿「${out.meta.title}」：${out.meta.grid.cols}×${out.meta.grid.rows} 格、${out.colorCount || out.meta.colorCount} 色 ${out.totalBeads} 粒${bg}（合并了 ${out.mergedColors} 个近似色）。` +
           `产物在 ${out.dir}：beads.svg（图纸）、beads.csv（色号矩阵）。用户可以在侧栏「拼豆工坊」面板查看并下载 PNG 图纸。`,
           listText(out.shoppingList.slice(0, 20), system))
+      }
+      if (args.action === 'optimize') {
+        if (!args.name) throw new Error('optimize 需要 name（项目名，源图缺省取项目 source.png）')
+        const out = await optimizeFlow({
+          name: args.name,
+          title: args.title,
+          image: args.image,
+          prompt: args.prompt,
+          granularity: args.granularity ?? cfg.defaultGranularity,
+          mode: args.mode,
+          mergeThreshold: args.mergeThreshold,
+          removeBg: args.removeBg !== undefined ? args.removeBg !== 'false' : true,
+          system,
+          thenConvert: args.thenConvert !== 'false',
+          volcAccessKeyId: cfg.volcAccessKeyId,
+          volcSecretAccessKey: cfg.volcSecretAccessKey,
+        })
+        return result(true,
+          out.converted
+            ? `AI 风格化完成并已重转「${args.name}」：${out.meta.grid.cols}×${out.meta.grid.rows} 格、${out.meta.colorCount} 色 ${out.totalBeads} 粒。风格化图存为 ${out.aiImage}（原图仍是 source.png）。`
+            : `AI 风格化完成：${out.aiImage}（未重转，如需转换用 action=convert 的 imagePath 指向它）。用户可在侧栏「拼豆工坊」面板查看。`)
       }
       if (args.action === 'read') {
         const out = readFlow(args.name)
@@ -148,6 +174,10 @@ export const perlerStudioTool = {
       if (err instanceof ImageSourceError) {
         // 来源问题写清楚，模型下一轮能自纠（换 attachments/换路径）
         return result(false, `图片来源问题：${err.message}`)
+      }
+      if (err instanceof JimengError) {
+        // AI 问题（未配 key / 风险拦截 / 超时）：结构化返回，模型能引导用户处理
+        return result(false, `AI 风格化失败：${err.message}`)
       }
       throw err
     }
@@ -238,5 +268,5 @@ export function apply(ctx, config) {
   configRef.config = config
   ctx.tools.register(perlerStudioTool)
   ctx.tools.register(perlerPaletteTool)
-  ctx.effect(() => registerApi(ctx), `${name}: routes`)
+  ctx.effect(() => registerApi(ctx, config), `${name}: routes`)
 }

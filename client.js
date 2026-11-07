@@ -5,8 +5,9 @@
 // 图纸 PNG 在浏览器 canvas 绘制（网格线+每格色号+统计区），数据全部来自 Host API。
 // ============================================================================
 const h = require('react').createElement
-const { useState, useEffect, useCallback } = require('react')
+const { useState, useEffect, useCallback, useRef } = require('react')
 const MAPPING = require('./lib/colorSystemMapping.json')
+const { getAllConnectedRegions, getConnectedRegion, sortRegionsByDistance, sortRegionsBySize, isRegionCompleted, clientToGrid } = require('./lib/regions.js')
 
 const PANEL_ID = 'perler-studio' // = cordis.patch.yml 的 id
 const BASE = 'perler-studio' // = host.js 的 webServer 前缀（相对路径 fetch）
@@ -186,32 +187,66 @@ function StudioPanel() {
   const [system, setSystem] = useState('MARD')
   const [error, setError] = useState('')
   const [converting, setConverting] = useState(false)
+  const [optimizing, setOptimizing] = useState(false)
+  const [optimizeSeconds, setOptimizeSeconds] = useState(0)
+  const [aiReady, setAiReady] = useState(null) // null=未知
   const [imageUrl, setImageUrl] = useState('')
   const [projectName, setProjectName] = useState('')
+  const [focusMode, setFocusMode] = useState(false)
 
   const loadProjects = useCallback(() => {
     fetchJson('/api/projects').then((d) => setProjects(d.projects)).catch((e) => setError(e.message))
+    fetchJson('/api/health').then((d) => setAiReady(Boolean(d.ai))).catch(() => setAiReady(false))
   }, [])
 
   useEffect(() => { loadProjects() }, [loadProjects])
 
+  // AI 风格化计时器
+  useEffect(() => {
+    if (!optimizing) return
+    const timer = setInterval(() => setOptimizeSeconds((s) => s + 1), 1000)
+    return () => clearInterval(timer)
+  }, [optimizing])
+
   const openProject = (name) => {
     setSelected(name)
     setDetail(null)
+    setFocusMode(false)
     fetchJson(`/api/project?name=${encodeURIComponent(name)}`)
       .then(setDetail)
       .catch((e) => setError(e.message))
   }
 
-  const convert = async () => {
+  const convert = async (optimizeFirst = false) => {
     if (!imageUrl.trim()) return
-    setConverting(true)
     setError('')
+    const body = imageUrl.trim().startsWith('data:')
+      ? { name: projectName || autoName(), imageDataUri: imageUrl.trim() }
+      : { name: projectName || autoName(), image: imageUrl.trim() }
+    if (optimizeFirst) {
+      // AI 风格化（火山即梦 4.0）+ 自动重转，最长约 3 分钟
+      if (aiReady === false) {
+        setError('还没有配置火山引擎 AK/SK：插件 → dsh-perler-studio → Configuration 填入后才能用 AI 风格化。可以直接「生成拼豆图」跳过 AI。')
+        return
+      }
+      setConverting(true)
+      setOptimizing(true)
+      setOptimizeSeconds(0)
+      try {
+        const out = await fetchJson('/api/optimize', body)
+        loadProjects()
+        openProject(out.project.name)
+        setImageUrl('')
+      } catch (e) {
+        setError(e.message)
+      } finally {
+        setOptimizing(false)
+        setConverting(false)
+      }
+      return
+    }
+    setConverting(true)
     try {
-      // 面板通道：图片以 dataURI（上传）或 URL（直链）给 Host；无需模型参与
-      const body = imageUrl.trim().startsWith('data:')
-        ? { name: projectName || autoName(), imageDataUri: imageUrl.trim() }
-        : { name: projectName || autoName(), image: imageUrl.trim() }
       const out = await fetchJson('/api/convert', body)
       loadProjects()
       openProject(out.project.name)
@@ -247,7 +282,8 @@ function StudioPanel() {
   }
 
   return h('div', { style: styles.wrap },
-    // 顶部：新建（上传图片 / 图片直链）
+    h('style', null, '@keyframes perler-pop{0%{transform:scale(0.8);opacity:0}60%{transform:scale(1.08)}100%{transform:scale(1);opacity:1}}'),
+    // 顶部：新建（上传图片 / 图片直链）+ AI 风格化
     h('div', { style: styles.card },
       h('div', { style: styles.row },
         h('label', { style: styles.upload },
@@ -258,7 +294,10 @@ function StudioPanel() {
           onChange: (e) => setImageUrl(e.target.value), style: { ...styles.input, flex: 1 },
         }),
         h('input', { placeholder: '项目名（可留空自动命名）', value: projectName, onChange: (e) => setProjectName(e.target.value), style: styles.input }),
-        h('button', { style: styles.button, onClick: convert, disabled: converting || !imageUrl }, converting ? '转换中…' : '生成拼豆图')),
+        h('button', { style: styles.buttonSecondary, onClick: () => convert(true), disabled: converting || optimizing || !imageUrl },
+          optimizing ? `AI 风格化中 ${optimizeSeconds}s…` : 'AI 风格化生成'),
+        h('button', { style: styles.button, onClick: () => convert(false), disabled: converting || optimizing || !imageUrl }, converting && !optimizing ? '转换中…' : '生成拼豆图')),
+      aiReady === false ? h('div', { style: styles.muted }, '提示：配置火山 AK/SK（插件 → Configuration）后可用「AI 风格化生成」，把普通图变成适合拼豆的 Q 版像素风。') : null,
       error ? h('div', { style: styles.error }, error) : null),
 
     h('div', { style: { ...styles.row, alignItems: 'flex-start' } },
@@ -274,15 +313,18 @@ function StudioPanel() {
               h('div', null, p.title || p.name),
               h('div', { style: styles.muted }, p.grid ? `${p.grid.cols}×${p.grid.rows} · ${p.totalBeads} 粒` : '未转换')))),
 
-      // 右：详情
+      // 右：详情（或专心拼豆模式）
       h('div', { style: { ...styles.card, flex: 1, minHeight: 300 } },
         !selected ? h('div', { style: styles.muted }, '← 选一个项目，或先转换一张图')
           : detail === null ? h('div', { style: styles.muted }, '加载中…')
-            : h('div', null,
+            : focusMode && detail.pixelData
+              ? h(FocusMode, { detail, system, onExit: () => setFocusMode(false) })
+              : h('div', null,
               h('div', { style: styles.row },
                 h('div', { style: styles.sectionTitle }, `${detail.meta.title || detail.meta.name}（${detail.gridDimensions.cols}×${detail.gridDimensions.rows}）`),
                 h('select', { value: system, onChange: (e) => setSystem(e.target.value), style: styles.input },
                   SYSTEMS.map((s) => h('option', { key: s, value: s }, s))),
+                h('button', { style: styles.buttonSecondary, onClick: () => setFocusMode(true), disabled: !detail.pixelData }, '🧩 专心拼豆'),
                 h('button', { style: styles.button, onClick: downloadPng }, '下载图纸 PNG'),
                 h('a', { href: `${BASE}/${selected}/beads.svg`, download: `beads-${selected}.svg`, style: styles.button }, 'SVG'),
                 h('a', { href: `${BASE}/${selected}/beads.csv`, download: `beads-${selected}.csv`, style: styles.button }, 'CSV')),
@@ -305,6 +347,7 @@ const styles = {
   row: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 },
   input: { padding: '6px 10px', border: '1px solid #d9d9de', borderRadius: 8, background: '#fff', color: '#1a1a1a', outline: 'none' },
   button: { padding: '6px 14px', border: 'none', borderRadius: 8, background: '#e8734a', color: '#fff', cursor: 'pointer', textDecoration: 'none', fontSize: 13, display: 'inline-block' },
+  buttonSecondary: { padding: '6px 14px', border: '1px solid #d9d9de', borderRadius: 8, background: '#f0f0f2', color: '#1a1a1a', cursor: 'pointer', fontSize: 13 },
   upload: { padding: '6px 14px', borderRadius: 8, background: '#f0f0f2', color: '#1a1a1a', cursor: 'pointer', border: '1px solid #d9d9de' },
   sectionTitle: { fontWeight: 700, marginBottom: 8 },
   muted: { color: '#8a8a92' },
@@ -315,6 +358,7 @@ const styles = {
   statRow: { display: 'flex', gap: 8, alignItems: 'center', background: '#fafafa', borderRadius: 8, padding: '6px 10px' },
   swatch: { width: 16, height: 16, borderRadius: 4, display: 'inline-block', border: '1px solid #ccc' },
   error: { color: '#c0392b', marginTop: 6 },
+  celebrate: { marginTop: 12, padding: '16px', borderRadius: 12, background: 'linear-gradient(90deg,#ffe08a,#ffb3a7)', color: '#7a3b1e', fontWeight: 700, fontSize: 16, textAlign: 'center', animation: 'perler-pop 0.6s ease' },
 }
 
 function apply(ctx) {
@@ -322,6 +366,135 @@ function apply(ctx) {
     ctx.slots.register({ name: 'sidebar.panellist', id: PANEL_ID, order: 8, label: () => '拼豆工坊' }, StudioIcon))
   ctx.slots.inject('main', () =>
     ctx.slots.register({ name: 'main', key: PANEL_ID }, StudioPanel))
+}
+
+// ============================================================================
+// 专心拼豆模式：选一种颜色 → 按连通域引导（最近/大块优先）→ 点格子打卡 → 全部完成庆祝。
+// 连通域逻辑来自 lib/regions.js（移植自原项目 floodFillUtils.ts）。
+// ============================================================================
+function FocusMode({ detail, system, onExit }) {
+  const { pixelData, gridDimensions } = detail
+  const cols = gridDimensions.cols
+  const rows = gridDimensions.rows
+  const stats = computeStats(pixelData)
+  const CELL = cols > 90 ? 18 : cols > 60 ? 24 : 30
+
+  const [colorIdx, setColorIdx] = useState(0) // 在 stats.list 中的序号
+  const [guidance, setGuidance] = useState('nearest') // nearest | largest
+  const [completed, setCompleted] = useState(() => new Set())
+  const [lastCell, setLastCell] = useState({ row: Math.floor(rows / 2), col: Math.floor(cols / 2) })
+  const canvasRef = useRef(null)
+
+  const currentColor = stats.list[colorIdx]?.hex
+  const regions = currentColor ? getAllConnectedRegions(pixelData, currentColor) : []
+  const sorted = guidance === 'largest'
+    ? sortRegionsBySize(regions)
+    : sortRegionsByDistance(regions, lastCell)
+  const currentRegion = sorted.find((region) => !isRegionCompleted(region, completed)) || null
+  const currentSet = currentRegion ? new Set(currentRegion.map(({ row, col }) => `${row},${col}`)) : new Set()
+  const colorTotal = stats.list[colorIdx]?.count || 0
+  const colorDone = [...completed].filter((key) => pixelData[Number(key.split(',')[0])][Number(key.split(',')[1])]?.color === currentColor).length
+  const allDone = stats.total > 0 && [...completed].filter((key) => {
+    const [r, c] = key.split(',').map(Number)
+    const cell = pixelData[r]?.[c]
+    return cell && !cell.isExternal && cell.key !== ERASE
+  }).length >= stats.total
+
+  const toggleCell = (row, col) => {
+    const cell = pixelData[row]?.[col]
+    if (!cell || cell.isExternal || cell.key === ERASE) return
+    if (cell.color !== currentColor) return
+    setLastCell({ row, col })
+    setCompleted((prev) => {
+      const next = new Set(prev)
+      const key = `${row},${col}`
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  // 渲染画布
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    canvas.width = cols * CELL
+    canvas.height = rows * CELL
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = '#fafafa'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const cell = pixelData[r][c]
+        const x = c * CELL
+        const y = r * CELL
+        const key = `${r},${c}`
+        const blank = !cell || cell.isExternal || cell.key === ERASE
+        if (blank) {
+          ctx.fillStyle = '#f1f1f1'
+          ctx.fillRect(x, y, CELL, CELL)
+          continue
+        }
+        if (cell.color === currentColor) {
+          if (completed.has(key)) {
+            ctx.fillStyle = cell.color // 已拼：实体色
+            ctx.fillRect(x, y, CELL, CELL)
+          } else if (currentSet.has(key)) {
+            ctx.fillStyle = '#ffffff' // 当前引导区：白底 + 色描边
+            ctx.fillRect(x, y, CELL, CELL)
+            ctx.strokeStyle = cell.color
+            ctx.lineWidth = 2
+            ctx.strokeRect(x + 1.5, y + 1.5, CELL - 3, CELL - 3)
+          } else {
+            ctx.fillStyle = '#e8e8ec' // 同色但还不是当前引导域
+            ctx.fillRect(x, y, CELL, CELL)
+            ctx.strokeStyle = '#d5d5da'
+            ctx.lineWidth = 1
+            ctx.strokeRect(x + 0.5, y + 0.5, CELL - 1, CELL - 1)
+          }
+        } else {
+          // 其他颜色：淡色提示
+          ctx.fillStyle = cell.color
+          ctx.globalAlpha = 0.13
+          ctx.fillRect(x, y, CELL, CELL)
+          ctx.globalAlpha = 1
+        }
+      }
+    }
+    // 网格线
+    ctx.strokeStyle = '#e0e0e0'
+    ctx.lineWidth = 0.5
+    for (let c = 0; c <= cols; c++) { ctx.beginPath(); ctx.moveTo(c * CELL, 0); ctx.lineTo(c * CELL, canvas.height); ctx.stroke() }
+    for (let r = 0; r <= rows; r++) { ctx.beginPath(); ctx.moveTo(0, r * CELL); ctx.lineTo(canvas.width, r * CELL); ctx.stroke() }
+  }, [pixelData, currentColor, completed, currentSet, cols, rows, CELL])
+
+  const onCanvasClick = (event) => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const hit = clientToGrid(canvas.getBoundingClientRect(), canvas.width, canvas.height, CELL, event.clientX, event.clientY)
+    if (hit && hit.row >= 0 && hit.row < rows && hit.col >= 0 && hit.col < cols) toggleCell(hit.row, hit.col)
+  }
+
+  const pickColor = (idx) => {
+    setColorIdx(idx)
+    setLastCell({ row: Math.floor(rows / 2), col: Math.floor(cols / 2) })
+  }
+
+  return h('div', null,
+    h('div', { style: styles.row },
+      h('button', { style: styles.buttonSecondary, onClick: onExit }, '← 返回'),
+      h('select', {
+        value: colorIdx, onChange: (e) => pickColor(Number(e.target.value)), style: styles.input,
+      },
+        stats.list.map((item, idx) => h('option', { key: item.hex, value: idx }, `${codeOf(item.hex, system)} ${item.hex} × ${item.count}`))),
+      h('button', { style: styles.buttonSecondary, onClick: () => setGuidance(guidance === 'nearest' ? 'largest' : 'nearest') },
+        guidance === 'nearest' ? '引导：最近优先' : '引导：大块优先'),
+      h('span', { style: styles.muted }, `当前色进度 ${colorDone}/${colorTotal}`),
+      h('button', { style: styles.buttonSecondary, onClick: () => setCompleted(new Set()) }, '重置')),
+    h('div', { style: styles.preview },
+      h('canvas', { ref: canvasRef, onClick: onCanvasClick, style: { maxWidth: '100%', cursor: 'pointer' } })),
+    h('div', { style: { ...styles.muted, marginTop: 8 } }, '点击当前色描边格子打卡（再点取消）。全部拼完有庆祝 🎉'),
+    allDone ? h('div', { style: styles.celebrate }, '🎉 全部完成！这部作品拼好啦 🎉') : null)
 }
 
 exports.isPlugin = true
