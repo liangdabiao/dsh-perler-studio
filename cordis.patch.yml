@@ -1,0 +1,5 @@
+# 拼豆工坊：Host 半边（转换工具、色号工具、面板接口与静态产物）。
+# 浏览器半边由 package.json 的 dsh.client 声明加载（./client → dist/client.js）。
+- insert:
+    - id: perler-studio
+      name: 'dsh-perler-studio'
