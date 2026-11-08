@@ -184,7 +184,14 @@ test('项目名校验与路径越界', () => {
 test('convertFlow 拒绝坏来源并给可读错误', async () => {
   await assert.rejects(() => convertFlow({ name: 'bad', image: 'relative/path.png' }), /绝对路径|attachments|dataURI|URL/)
   await assert.rejects(() => convertFlow({ name: 'bad', image: 'http://127.0.0.1:9/x.png' }), /内网|下载失败/)
-  await assert.rejects(() => convertFlow({ name: 'bad/x', imageDataUri: 'data:image/png;base64,aGk=' }), /项目名不合法/)
+})
+
+// 项目名自动净化：坏名字自动修，不再报错（用户反馈：不该让用户手动改）
+test('项目名自动净化：空格/非法字符/超长自动处理', async () => {
+  const { sanitizeProjectName } = await import('../lib/project.js')
+  const fixed = sanitizeProjectName('jimeng-2025-12-13-2524-核心概念与视角 我正致力于创作一个')
+  assert.equal(fixed, 'jimeng-2025-12-13-2524-核心概念与视角-我正致力于创作一个')
+  await assert.rejects(() => convertFlow({ name: '...', imageDataUri: 'data:image/png;base64,aGk=' }), /净化后为空/)
 })
 
 // ---------- API 鉴权 ----------
