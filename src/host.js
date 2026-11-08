@@ -81,7 +81,7 @@ export const perlerStudioTool = {
     required: ['action'],
     properties: {
       action: str('convert 转换；optimize AI 风格化后自动重转；read 读项目；list 列项目；shopping 采购清单；reconvert 改参数重转', { enum: ['convert', 'optimize', 'read', 'list', 'shopping', 'reconvert'] }),
-      name: str('项目名（即存档目录名）：字母/数字/中文短横线等，不要带路径符或空格'),
+      name: str('项目名（即存档目录名）：随意起，系统会自动清理空格/非法字符并截断到 64 字符'),
       title: str('可选：展示标题'),
       image: str('convert/optimize：图片来源（绝对路径 / http(s) URL / dataURI / "attachments"）。optimize 缺省用项目已有源图'),
       prompt: str('optimize 可选：风格化提示词。缺省用内置的 chibi 像素画风格'),
