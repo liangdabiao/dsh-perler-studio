@@ -66,6 +66,55 @@ function luminance(hex) {
 
 // ---------- 图纸 PNG 绘制（移植 imageDownloader.ts 精简版：标题+网格+每格色号+统计区） ----------
 
+// 网格绘制核心（renderChart 与 LivePreview 共用）：格子填色 + 色号 + 每 10 格粗线
+function drawBoard(ctx, detail, system, cellSize, x0, y0) {
+  const { pixelData } = detail
+  const cols = pixelData[0].length
+  const rows = pixelData.length
+  const boardW = cols * cellSize
+  const boardH = rows * cellSize
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const cell = pixelData[r][c]
+      const x = x0 + c * cellSize
+      const y = y0 + r * cellSize
+      if (cell && !cell.isExternal && cell.key !== ERASE) {
+        ctx.fillStyle = cell.color
+        ctx.fillRect(x, y, cellSize, cellSize)
+        if (cellSize >= 18) {
+          const code = codeOf(cell.color.toUpperCase(), system)
+          if (code && code !== '?') {
+            ctx.fillStyle = luminance(cell.color.toUpperCase()) > 0.6 ? '#333333' : '#ffffff'
+            ctx.font = `${Math.min(12, cellSize / 2.4)}px Consolas, monospace`
+            ctx.textAlign = 'center'
+            ctx.fillText(code, x + cellSize / 2, y + cellSize / 2 + 4)
+            ctx.textAlign = 'left'
+          }
+        }
+      } else {
+        ctx.fillStyle = '#f0f0f0'
+        ctx.fillRect(x, y, cellSize, cellSize)
+      }
+    }
+  }
+  ctx.strokeStyle = '#dddddd'
+  ctx.lineWidth = 0.6
+  for (let c = 0; c <= cols; c++) {
+    ctx.beginPath(); ctx.moveTo(x0 + c * cellSize, y0); ctx.lineTo(x0 + c * cellSize, y0 + boardH); ctx.stroke()
+  }
+  for (let r = 0; r <= rows; r++) {
+    ctx.beginPath(); ctx.moveTo(x0, y0 + r * cellSize); ctx.lineTo(x0 + boardW, y0 + r * cellSize); ctx.stroke()
+  }
+  ctx.strokeStyle = '#999999'
+  ctx.lineWidth = 1
+  for (let c = 10; c <= cols; c += 10) {
+    ctx.beginPath(); ctx.moveTo(x0 + c * cellSize, y0); ctx.lineTo(x0 + c * cellSize, y0 + boardH); ctx.stroke()
+  }
+  for (let r = 10; r <= rows; r += 10) {
+    ctx.beginPath(); ctx.moveTo(x0, y0 + r * cellSize); ctx.lineTo(x0 + boardW, y0 + r * cellSize); ctx.stroke()
+  }
+}
+
 function renderChart(detail, system, cellSize = 30) {
   const { pixelData } = detail
   const cols = pixelData[0].length
@@ -95,55 +144,8 @@ function renderChart(detail, system, cellSize = 30) {
 
   const x0 = margin
   const y0 = margin + titleH
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const cell = pixelData[r][c]
-      const x = x0 + c * cellSize
-      const y = y0 + r * cellSize
-      if (cell && !cell.isExternal && cell.key !== ERASE) {
-        ctx.fillStyle = cell.color
-        ctx.fillRect(x, y, cellSize, cellSize)
-        if (cellSize >= 18) {
-          const code = codeOf(cell.color.toUpperCase(), system)
-          if (code && code !== '?') {
-            ctx.fillStyle = luminance(cell.color.toUpperCase()) > 0.6 ? '#333333' : '#ffffff'
-            ctx.font = `${Math.min(12, cellSize / 2.4)}px Consolas, monospace`
-            ctx.textAlign = 'center'
-            ctx.fillText(code, x + cellSize / 2, y + cellSize / 2 + 4)
-            ctx.textAlign = 'left'
-          }
-        }
-      } else {
-        ctx.fillStyle = '#f0f0f0'
-        ctx.fillRect(x, y, cellSize, cellSize)
-      }
-    }
-  }
+  drawBoard(ctx, detail, system, cellSize, x0, y0)
 
-  ctx.strokeStyle = '#dddddd'
-  ctx.lineWidth = 0.6
-  for (let c = 0; c <= cols; c++) {
-    ctx.beginPath()
-    ctx.moveTo(x0 + c * cellSize, y0)
-    ctx.lineTo(x0 + c * cellSize, y0 + boardH)
-    ctx.stroke()
-  }
-  for (let r = 0; r <= rows; r++) {
-    ctx.beginPath()
-    ctx.moveTo(x0, y0 + r * cellSize)
-    ctx.lineTo(x0 + boardW, y0 + r * cellSize)
-    ctx.stroke()
-  }
-  ctx.strokeStyle = '#999999'
-  ctx.lineWidth = 1.2
-  for (let c = 0; c <= cols; c += 10) {
-    ctx.beginPath(); ctx.moveTo(x0 + c * cellSize, y0); ctx.lineTo(x0 + c * cellSize, y0 + boardH); ctx.stroke()
-  }
-  for (let r = 0; r <= rows; r += 10) {
-    ctx.beginPath(); ctx.moveTo(x0, y0 + r * cellSize); ctx.lineTo(x0 + boardW, y0 + r * cellSize); ctx.stroke()
-  }
-  ctx.strokeStyle = '#555555'
-  ctx.strokeRect(x0, y0, boardW, boardH)
 
   if (list.length) {
     const sy = y0 + boardH + 34
@@ -233,6 +235,26 @@ function SettingsPanel() {
       h('br'), '密钥只存在你本机（$DSH_HOME/perler-studio/settings.json），任何接口都不会回显明文。'))
 }
 
+
+// ---------- 实时预览：客户端 canvas 渲染，色号系统切换即时生效 ----------
+function LivePreview({ detail, system }) {
+  const ref = useRef(null)
+  useEffect(() => {
+    const canvas = ref.current
+    if (!canvas || !detail?.pixelData) return
+    const cols = detail.gridDimensions.cols
+    const rows = detail.gridDimensions.rows
+    const cell = Math.max(5, Math.min(26, Math.floor(920 / cols)))
+    canvas.width = cols * cell + 40
+    canvas.height = rows * cell + 40
+    const ctx = canvas.getContext('2d')
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    drawBoard(ctx, detail, system, cell, 20, 20)
+  }, [detail, system])
+  return h('canvas', { ref, style: { maxWidth: '100%', display: 'block', margin: '0 auto' } })
+}
+
 function StudioPanel() {
   const [projects, setProjects] = useState(null)
   const [selected, setSelected] = useState(null)
@@ -248,6 +270,8 @@ function StudioPanel() {
   const [projectName, setProjectName] = useState('')
   const [focusMode, setFocusMode] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [reconvertSize, setReconvertSize] = useState(null)
+  const [reconverting, setReconverting] = useState(false)
 
   const loadProjects = useCallback(() => {
     fetchJson('/api/projects').then((d) => setProjects(d.projects)).catch((e) => setError(e.message))
@@ -268,7 +292,7 @@ function StudioPanel() {
     setDetail(null)
     setFocusMode(false)
     fetchJson(`/api/project?name=${encodeURIComponent(name)}`)
-      .then(setDetail)
+      .then((d) => { setDetail(d); setReconvertSize(d.gridDimensions ? d.gridDimensions.cols : 50) })
       .catch((e) => setError(e.message))
   }
 
@@ -424,14 +448,30 @@ function StudioPanel() {
                 detail.meta.removedCells
                   ? h('span', { style: styles.mutedSmall }, `已去背景 ${detail.meta.removedCells} 格（${Math.round((detail.meta.removedRatio || 0) * 100)}%）`)
                   : null,
-                h('select', { value: system, onChange: (e) => setSystem(e.target.value), style: styles.input },
+                h('select', { value: system, onChange: (e) => setSystem(e.target.value), style: styles.input, title: '色号系统（切换即时生效）' },
                   SYSTEMS.map((s) => h('option', { key: s, value: s }, s))),
+                h('select', { value: reconvertSize, onChange: (e) => setReconvertSize(Number(e.target.value)), style: styles.input, title: '格子数（横向）' },
+                  [16, 24, 32, 40, 50, 64, 80, 100, 128].map((n) => h('option', { key: n, value: n }, `${n} 格`))),
+                h('button', {
+                  style: styles.buttonSecondary,
+                  disabled: reconverting || Number(reconvertSize) === Number(detail.gridDimensions.cols),
+                  onClick: async () => {
+                    setReconverting(true); setError('')
+                    try {
+                      await fetchJson('/api/reconvert', { name: selected, granularity: reconvertSize, system })
+                      const d = await fetchJson(`/api/project?name=${encodeURIComponent(selected)}`)
+                      setDetail(d); loadProjects()
+                    } catch (e) { setError(e.message) } finally { setReconverting(false) }
+                  },
+                }, reconverting ? '重转中…' : '🔄 按此尺寸重转'),
                 h('button', { style: styles.buttonSecondary, onClick: () => setFocusMode(true), disabled: !detail.pixelData }, '🧩 专心拼豆'),
                 h('button', { style: styles.button, onClick: downloadPng }, '下载图纸 PNG'),
                 h('a', { href: `${BASE}/${selected}/beads.svg`, download: `beads-${selected}.svg`, style: styles.button }, 'SVG'),
                 h('a', { href: `${BASE}/${selected}/beads.csv`, download: `beads-${selected}.csv`, style: styles.button }, 'CSV')),
               h('div', { style: styles.preview },
-                h('img', { src: `${BASE}/${selected}/beads.svg`, alt: '拼豆图纸', style: { maxWidth: '100%' } })),
+                h(LivePreview, { detail, system })),
+              h('div', { style: styles.mutedSmall, textAlign: 'center', marginTop: 4 },
+                '预览实时响应色号系统切换；「下载图纸 PNG」含采购清单，SVG 为矢量原图'),
               stats ? h('div', { style: { marginTop: 12 } },
                 h('div', { style: styles.sectionTitle }, `采购清单（${stats.list.length} 色 / ${stats.total} 粒）`),
                 h('div', { style: styles.statsGrid },
