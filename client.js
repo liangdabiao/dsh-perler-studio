@@ -125,7 +125,8 @@ function renderChart(detail, system, cellSize = 30) {
   const titleH = 46
   const boardW = cols * cellSize
   const boardH = rows * cellSize
-  const statsCols = Math.min(4, Math.max(1, Math.ceil(list.length / 25)))
+  // 横排：按图纸宽度放列（每列约 180px），宽度足够时清单横向铺开
+  const statsCols = Math.max(1, Math.min(6, Math.floor(boardW / 180)))
   const statRows = Math.ceil(list.length / statsCols)
   const statsH = list.length ? statRows * 30 + 56 : 40
   const W = boardW + margin * 2
