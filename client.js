@@ -191,6 +191,7 @@ function StudioPanel() {
   const [optimizeSeconds, setOptimizeSeconds] = useState(0)
   const [aiReady, setAiReady] = useState(null) // null=未知
   const [imageUrl, setImageUrl] = useState('')
+  const [pickedInfo, setPickedInfo] = useState('')
   const [projectName, setProjectName] = useState('')
   const [focusMode, setFocusMode] = useState(false)
 
@@ -218,7 +219,10 @@ function StudioPanel() {
   }
 
   const convert = async (optimizeFirst = false) => {
-    if (!imageUrl.trim()) return
+    if (!imageUrl.trim()) {
+      setError('还没有图片：先点「选择图片」选一张，或粘贴图片直链。')
+      return
+    }
     setError('')
     const body = imageUrl.trim().startsWith('data:')
       ? { name: projectName || autoName(), imageDataUri: imageUrl.trim() }
@@ -237,6 +241,7 @@ function StudioPanel() {
         loadProjects()
         openProject(out.project.name)
         setImageUrl('')
+        setPickedInfo('')
       } catch (e) {
         setError(e.message)
       } finally {
@@ -251,6 +256,7 @@ function StudioPanel() {
       loadProjects()
       openProject(out.project.name)
       setImageUrl('')
+      setPickedInfo('')
     } catch (e) {
       setError(e.message)
     } finally {
@@ -275,10 +281,38 @@ function StudioPanel() {
   const onPickFile = (event) => {
     const file = event.target.files && event.target.files[0]
     if (!file) return
-    setProjectName(projectName || file.name.replace(/\.(png|jpe?g|webp)$/i, '').slice(0, 40))
-    const reader = new FileReader()
-    reader.onload = () => setImageUrl(String(reader.result))
-    reader.readAsDataURL(file)
+    setError('')
+    setProjectName(projectName || file.name.replace(/\.[a-z0-9]+$/i, '').slice(0, 40))
+    // 统一走浏览器解码 → 长边 >1500px 自动缩小 → 重编码 PNG 再上传。
+    // 一次性消灭两类面板失败：>8MB 大图（413）与 PNG/JPG 之外的格式（webp/bmp 等）。
+    const objectUrl = URL.createObjectURL(file)
+    const img = new Image()
+    const fail = (msg) => { URL.revokeObjectURL(objectUrl); setPickedInfo(''); setError(msg) }
+    img.onload = () => {
+      const w0 = img.naturalWidth
+      const h0 = img.naturalHeight
+      if (!w0 || !h0) return fail('图片宽高为 0，文件可能损坏。换一张试试。')
+      URL.revokeObjectURL(objectUrl)
+      try {
+        const MAX_EDGE = 1500
+        const scale = Math.min(1, MAX_EDGE / Math.max(w0, h0))
+        const w = Math.max(1, Math.round(w0 * scale))
+        const h = Math.max(1, Math.round(h0 * scale))
+        const canvas = document.createElement('canvas')
+        canvas.width = w
+        canvas.height = h
+        const ctx = canvas.getContext('2d')
+        ctx.imageSmoothingEnabled = true
+        ctx.imageSmoothingQuality = 'high'
+        ctx.drawImage(img, 0, 0, w, h)
+        setImageUrl(canvas.toDataURL('image/png'))
+        setPickedInfo(`已就绪：${file.name}（${w0}×${h0}${scale < 1 ? ` → 已缩放 ${w}×${h}` : ''}）`)
+      } catch (e) {
+        setError('图片处理失败：' + (e?.message || e))
+      }
+    }
+    img.onerror = () => fail('浏览器无法解码这张图。HEIC（iPhone 原图）等格式请先用系统相册/画图转成 PNG 或 JPG 再上传。')
+    img.src = objectUrl
   }
 
   return h('div', { style: styles.wrap },
@@ -287,7 +321,7 @@ function StudioPanel() {
     h('div', { style: styles.card },
       h('div', { style: styles.row },
         h('label', { style: styles.upload },
-          h('input', { type: 'file', accept: 'image/png,image/jpeg', style: { display: 'none' }, onChange: onPickFile }),
+          h('input', { type: 'file', accept: 'image/*', style: { display: 'none' }, onChange: onPickFile }),
           '选择图片'),
         h('input', {
           placeholder: '或粘贴图片直链（http…）', value: imageUrl && !imageUrl.startsWith('data:') ? imageUrl : '',
@@ -298,6 +332,11 @@ function StudioPanel() {
           optimizing ? `AI 风格化中 ${optimizeSeconds}s…` : 'AI 风格化生成'),
         h('button', { style: styles.button, onClick: () => convert(false), disabled: converting || optimizing || !imageUrl }, converting && !optimizing ? '转换中…' : '生成拼豆图')),
       aiReady === false ? h('div', { style: styles.muted }, '提示：配置火山 AK/SK（插件 → Configuration）后可用「AI 风格化生成」，把普通图变成适合拼豆的 Q 版像素风。') : null,
+      pickedInfo ? h('div', { style: styles.row },
+        imageUrl && imageUrl.startsWith('data:')
+          ? h('img', { src: imageUrl, style: styles.pickPreview, alt: '所选图片预览' })
+          : null,
+        h('div', { style: styles.muted }, pickedInfo)) : null,
       error ? h('div', { style: styles.error }, error) : null),
 
     h('div', { style: { ...styles.row, alignItems: 'flex-start' } },
@@ -322,6 +361,9 @@ function StudioPanel() {
               : h('div', null,
               h('div', { style: styles.row },
                 h('div', { style: styles.sectionTitle }, `${detail.meta.title || detail.meta.name}（${detail.gridDimensions.cols}×${detail.gridDimensions.rows}）`),
+                detail.meta.removedCells
+                  ? h('span', { style: styles.mutedSmall }, `已去背景 ${detail.meta.removedCells} 格（${Math.round((detail.meta.removedRatio || 0) * 100)}%）`)
+                  : null,
                 h('select', { value: system, onChange: (e) => setSystem(e.target.value), style: styles.input },
                   SYSTEMS.map((s) => h('option', { key: s, value: s }, s))),
                 h('button', { style: styles.buttonSecondary, onClick: () => setFocusMode(true), disabled: !detail.pixelData }, '🧩 专心拼豆'),
@@ -342,6 +384,8 @@ function StudioPanel() {
 
 // 极简内联样式：用少量中性色，暗色模式靠 dsh 主题变量兜底不做完整跟随（二期换 --dsw-alias-* token）
 const styles = {
+  pickPreview: { width: 72, height: 72, objectFit: 'cover', borderRadius: 8, border: '1px solid #e3e3e6' },
+  mutedSmall: { color: '#a0a0a8', fontSize: 12 },
   wrap: { padding: 16, overflow: 'auto', height: '100%', boxSizing: 'border-box', fontFamily: '-apple-system, "Segoe UI", "Microsoft YaHei", sans-serif', fontSize: 13, color: '#1a1a1a' },
   card: { background: '#ffffff', border: '1px solid #e3e3e6', borderRadius: 10, padding: 12, marginBottom: 12 },
   row: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 },
