@@ -1,6 +1,6 @@
 {
   "name": "dsh-perler-studio",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "拼豆工坊：把图片转成拼豆底稿（291 色 × MARD/COCO/漫漫/盼盼/咪小窝 色号），出图纸 SVG/PNG、采购清单 CSV；二期接火山即梦 4.0 AI 风格化。",
   "license": "Apache-2.0",
   "type": "module",
