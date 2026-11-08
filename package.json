@@ -46,7 +46,8 @@
   },
   "dependencies": {
     "jpeg-js": "^0.4.4",
-    "pngjs": "^7.0.0"
+    "pngjs": "^7.0.0",
+    "@deepseek-ai/schemastery": "^3.19.0"
   },
   "devDependencies": {
     "esbuild": "^0.25.10"
