@@ -180,6 +180,59 @@ function downloadCanvas(canvas, filename) {
 
 // ---------- 面板组件 ----------
 
+
+// ---------- AI 密钥设置（面板内直配，存本机 $DSH_HOME，永不上传/回显明文） ----------
+function SettingsPanel() {
+  const [info, setInfo] = useState(null)
+  const [ak, setAk] = useState('')
+  const [sk, setSk] = useState('')
+  const [msg, setMsg] = useState('')
+  const [error, setError] = useState('')
+  const load = useCallback(() => {
+    fetchJson('/api/config').then(setInfo).catch((e) => setError(e.message))
+  }, [])
+  useEffect(() => { load() }, [load])
+  const save = async () => {
+    setError(''); setMsg('')
+    if (!ak.trim() && !sk.trim()) { setError('先粘贴 AccessKeyId / SecretAccessKey。'); return }
+    try {
+      const d = await fetchJson('/api/config', { volcAccessKeyId: ak.trim(), volcSecretAccessKey: sk.trim() })
+      setInfo(d.credentials); setAk(''); setSk('')
+      setMsg('已保存（存本机 $DSH_HOME/perler-studio/settings.json，不会上传）。现在可以点「AI 风格化生成」了。')
+    } catch (e) { setError(e.message) }
+  }
+  const clear = async () => {
+    setError(''); setMsg('')
+    try {
+      const res = await fetch(BASE + '/api/config', { method: 'DELETE' })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error || '清除失败')
+      setInfo(d.credentials); setMsg('已清除本机保存的密钥。')
+    } catch (e) { setError(e.message) }
+  }
+  return h('div', { style: styles.card },
+    h('div', { style: styles.sectionTitle }, '⚙️ AI 风格化密钥（火山引擎 · 即梦 4.0）'),
+    info === null ? h('div', { style: styles.muted }, '加载中…')
+      : h('div', { style: styles.muted },
+          info.configured
+            ? `已配置 ✓（${info.accessKeyMasked} / ${info.secretKeyMasked}）`
+            : '未配置。粘贴下面两项并保存，即可使用「AI 风格化生成」。'),
+    h('div', { style: styles.settingsField }, h('input', {
+      type: 'password', placeholder: 'AccessKeyId', value: ak, onChange: (e) => setAk(e.target.value), style: styles.input,
+    })),
+    h('div', { style: styles.settingsField }, h('input', {
+      type: 'password', placeholder: 'SecretAccessKey', value: sk, onChange: (e) => setSk(e.target.value), style: styles.input,
+    })),
+    h('div', { style: styles.row },
+      h('button', { style: styles.button, onClick: save }, '保存密钥'),
+      info?.configured ? h('button', { style: styles.buttonSecondary, onClick: clear }, '清除已存密钥') : null),
+    msg ? h('div', { style: styles.ok }, msg) : null,
+    error ? h('div', { style: styles.error }, error) : null,
+    h('div', { style: { ...styles.muted, fontSize: 12, lineHeight: 1.8 } },
+      '获取方式：火山引擎控制台 → 右上角头像 →「API 访问密钥」→ 新建一对 AccessKeyId / SecretAccessKey（需开通即梦/视觉智能服务）。',
+      h('br'), '密钥只存在你本机（$DSH_HOME/perler-studio/settings.json），任何接口都不会回显明文。'))
+}
+
 function StudioPanel() {
   const [projects, setProjects] = useState(null)
   const [selected, setSelected] = useState(null)
@@ -194,6 +247,7 @@ function StudioPanel() {
   const [pickedInfo, setPickedInfo] = useState('')
   const [projectName, setProjectName] = useState('')
   const [focusMode, setFocusMode] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
 
   const loadProjects = useCallback(() => {
     fetchJson('/api/projects').then((d) => setProjects(d.projects)).catch((e) => setError(e.message))
@@ -330,8 +384,14 @@ function StudioPanel() {
         h('input', { placeholder: '项目名（可留空自动命名）', value: projectName, onChange: (e) => setProjectName(e.target.value), style: styles.input }),
         h('button', { style: styles.buttonSecondary, onClick: () => convert(true), disabled: converting || optimizing || !imageUrl },
           optimizing ? `AI 风格化中 ${optimizeSeconds}s…` : 'AI 风格化生成'),
-        h('button', { style: styles.button, onClick: () => convert(false), disabled: converting || optimizing || !imageUrl }, converting && !optimizing ? '转换中…' : '生成拼豆图')),
-      aiReady === false ? h('div', { style: styles.muted }, '提示：配置火山 AK/SK（插件 → Configuration）后可用「AI 风格化生成」，把普通图变成适合拼豆的 Q 版像素风。') : null,
+        h('button', { style: styles.button, onClick: () => convert(false), disabled: converting || optimizing || !imageUrl }, converting && !optimizing ? '转换中…' : '生成拼豆图'),
+        h('button', {
+          style: showSettings ? styles.buttonSecondary : styles.upload,
+          onClick: () => setShowSettings((v) => !v),
+          title: '配置火山 AK/SK，启用 AI 风格化',
+        }, '⚙️ AI 密钥')),
+      aiReady === false && !showSettings ? h('div', { style: styles.muted }, '提示：点右上角「⚙️ AI 密钥」粘贴火山 AK/SK 即可用「AI 风格化生成」，把普通图变成适合拼豆的 Q 版像素风。') : null,
+      showSettings ? h(SettingsPanel) : null,
       pickedInfo ? h('div', { style: styles.row },
         imageUrl && imageUrl.startsWith('data:')
           ? h('img', { src: imageUrl, style: styles.pickPreview, alt: '所选图片预览' })
@@ -384,6 +444,8 @@ function StudioPanel() {
 
 // 极简内联样式：用少量中性色，暗色模式靠 dsh 主题变量兜底不做完整跟随（二期换 --dsw-alias-* token）
 const styles = {
+  settingsField: { marginBottom: 8 },
+  ok: { color: '#1a7f37', marginTop: 6 },
   pickPreview: { width: 72, height: 72, objectFit: 'cover', borderRadius: 8, border: '1px solid #e3e3e6' },
   mutedSmall: { color: '#a0a0a8', fontSize: 12 },
   wrap: { padding: 16, overflow: 'auto', height: '100%', boxSizing: 'border-box', fontFamily: '-apple-system, "Segoe UI", "Microsoft YaHei", sans-serif', fontSize: 13, color: '#1a1a1a' },
