@@ -2,6 +2,9 @@
 
 DeepSeek Harness（dsh）插件：把任意图片转成**拼豆底稿**——291 色标准色板匹配、五套色号对照（MARD / COCO / 漫漫 / 盼盼 / 咪小窝）、AI 风格化、图纸与采购清单导出、逐格拼装引导。基于 [perler-beads-ai](https://github.com/liangdabiao/perler-beads-ai)（Apache-2.0）的核心算法移植。
 
+<img width="2490" height="1245" alt="image" src="https://github.com/user-attachments/assets/c81c040a-bf19-4b70-8b8f-ee973cfdb943" />
+
+
 ## 装上以后有什么
 
 | 能力 | 说明 |
