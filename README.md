@@ -62,7 +62,7 @@ scripts/dev-sandbox.ps1 4313   # 隔离 DSH_HOME 起网页版（Windows）；bas
 ## 安装
 
 ```bash
-dsh plugin --profile web add dsh-perler-studio
+dsh plugin --profile web add https://github.com/liangdabiao/dsh-perler-studio
 ```
 
 ## 许可
